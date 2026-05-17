@@ -125,11 +125,7 @@ streamlit run app.py
 
 ## 👤 Author
 
-Built by: [Your Name]
+Built by: HubertKuo
 Focus: Computer Vision, AI Systems, Machine Learning
 
 ---
-
-## 📌 Summary
-
-AI_Vision_Lab demonstrates how classical CV and deep learning can be unified into a single extensible AI system with c
