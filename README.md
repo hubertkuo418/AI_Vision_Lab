@@ -1,46 +1,44 @@
 # AI_Vision_Lab
 
-A modular computer vision laboratory built with Python, OpenCV, and Streamlit.
-It integrates classical image processing and deep learning-based face detection into a single interactive platform.
+> A modular computer vision system combining classical image processing and deep learning-based face detection.
 
 ---
 
-## Overview
+## 🚀 Overview
 
-AI_Vision_Lab is an interactive CV playground that allows users to:
+AI_Vision_Lab is an interactive computer vision playground that integrates:
 
-- Upload images for processing
-- Apply classical OpenCV operations
-- Perform AI-based face detection (Haar / DNN)
-- Run real-time webcam face detection
-- Switch between models dynamically
+- Classical OpenCV image processing
+- AI-based face detection (Haar / DNN)
+- Real-time webcam inference
+- Dynamic model switching system
 
-The goal is to build a **modular AI vision system**, not just standalone scripts.
+The goal is to demonstrate a **modular AI vision architecture**, not just isolated scripts.
 
 ---
 
-## Features
+## ✨ Features
 
-### Image Processing
+### 🖼 Image Processing
 - Grayscale conversion
 - Gaussian Blur
 - Canny Edge Detection
 - Histogram Equalization
 - Morphological operations (dilate / erode)
 
-### AI Vision
-- Face Detection (Haar Cascade)
-- Face Detection (DNN - deep learning)
-- Confidence threshold control
+### 🤖 AI Face Detection
+- Haar Cascade face detection
+- Deep learning-based DNN face detection
+- Confidence threshold tuning
 
-### Webcam Mode
-- Real-time webcam stream
-- Live face detection
+### 📹 Real-time Webcam
+- Live video processing
+- Real-time face detection
 - Model switching (Haar / DNN)
 
 ---
 
-## System Design
+## 🧠 System Design
 
 ```
 Streamlit UI
@@ -49,23 +47,27 @@ Model Selector
    ↓
 model_registry.py
    ↓
-OpenCV / DNN modules
+OpenCV / DNN pipelines
    ↓
 Processed output
 ```
 
-Key idea: **separation of UI and model logic** for scalability.
+Key idea: separation of UI, logic, and model pipelines for scalability.
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 AI_Vision_Lab/
 │
 ├── app.py
 ├── requirements.txt
-├── README.md
+│
+├── assets/
+│   ├── face_detection.png
+│   ├── image_processing.png
+│   └── webcam.png
 │
 ├── models/
 │   ├── deploy.prototxt
@@ -76,7 +78,7 @@ AI_Vision_Lab/
     ├── edges.py
     ├── histogram.py
     ├── morphology.py
-    ├── face_detection.py
+    ├── haar_face_detection.py
     ├── dnn_face_detection.py
     ├── model_registry.py
     └── webcam_runner.py
@@ -84,7 +86,20 @@ AI_Vision_Lab/
 
 ---
 
-## Installation
+## 🎯 Demo
+
+### Image Processing
+![image processing](assets/image_processing.png)
+
+### Face Detection
+![face detection](assets/face_detection.png)
+
+### Webcam Mode
+![webcam](assets/webcam.png)
+
+---
+
+## ⚙️ Installation
 
 ```bash
 git clone https://github.com/your-username/AI_Vision_Lab.git
@@ -94,7 +109,7 @@ pip install -r requirements.txt
 
 ---
 
-## Run
+## ▶️ Run
 
 ```bash
 streamlit run app.py
@@ -102,30 +117,28 @@ streamlit run app.py
 
 ---
 
-## Key Concepts
+## 🧩 Key Concepts
 
-- Image preprocessing fundamentals
-- Classical computer vision
-- Deep learning face detection
-- Real-time video processing
-- Modular software architecture
-- Model switching design pattern
+- Classical computer vision fundamentals
+- Deep learning-based inference (OpenCV DNN)
+- Real-time video processing pipeline
+- Modular architecture design
+- Model abstraction layer
+- UI + backend separation
 
 ---
 
-## Future Work
+## 🔮 Future Work
 
 - YOLO object detection integration
-- Face recognition (identity-level)
-- FPS performance overlay
-- Snapshot / recording feature
-- UI redesign (dashboard layout)
+- Face recognition (identity-level system)
+- FPS / performance monitoring
+- Snapshot & recording system
+- UI redesign (dashboard-style interface)
 
 ---
 
-## Author
+## 👤 Author
 
-Built by: HubertKuo
-Focus: Computer Vision, AI Systems, Machine Learning
-
----
+Built by: Hubert Kuo  
+Focus: Computer Vision / AI Systems / Machine Learning

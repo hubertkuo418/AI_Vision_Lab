@@ -5,17 +5,17 @@ from src.morphology import dilate, erode
 from src.haar_face_detection import detect_faces_haar
 from src.dnn_face_detection import detect_faces_dnn
 
+
 def run_model(model_name, img, params=None):
-    """
-    Unified interface for all models
-    """
+   
 
     if params is None:
         params = {}
 
     # =========================
-    # CV PIPELINE MODELS
+    # Classical Computer Vision Pipelines
     # =========================
+
     if model_name == "Gray":
         return to_gray(img)
 
@@ -42,13 +42,15 @@ def run_model(model_name, img, params=None):
         return erode(gray)
 
     # =========================
-    # AI MODELS
+    # AI-based Models
     # =========================
+
     elif model_name == "Face Detection (Haar)":
         return detect_faces_haar(img)
-    
+
     elif model_name == "Face Detection (DNN)":
         return detect_faces_dnn(img, params.get("conf_threshold", 0.5))
 
     else:
+        # If model name is not recognized, return original image unchanged
         return img
