@@ -4,7 +4,7 @@
 
 ---
 
-## 🚀 Overview
+## Overview
 
 AI_Vision_Lab is an interactive computer vision playground that integrates:
 
@@ -17,28 +17,28 @@ The goal is to demonstrate a **modular AI vision architecture**, not just isolat
 
 ---
 
-## ✨ Features
+## Features
 
-### 🖼 Image Processing
+### Image Processing
 - Grayscale conversion
 - Gaussian Blur
 - Canny Edge Detection
 - Histogram Equalization
 - Morphological operations (dilate / erode)
 
-### 🤖 AI Face Detection
+### AI Face Detection
 - Haar Cascade face detection
 - Deep learning-based DNN face detection
 - Confidence threshold tuning
 
-### 📹 Real-time Webcam
+### Real-time Webcam
 - Live video processing
 - Real-time face detection
 - Model switching (Haar / DNN)
 
 ---
 
-## 🧠 System Design
+## System Design
 
 ```
 Streamlit UI
@@ -56,7 +56,7 @@ Key idea: separation of UI, logic, and model pipelines for scalability.
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 AI_Vision_Lab/
@@ -86,7 +86,7 @@ AI_Vision_Lab/
 
 ---
 
-## 🎯 Demo
+## Demo
 
 ### Image Processing
 ![image processing](assets/image_processing.png)
@@ -99,7 +99,7 @@ AI_Vision_Lab/
 
 ---
 
-## ⚙️ Installation
+## Installation
 
 ```bash
 git clone https://github.com/your-username/AI_Vision_Lab.git
@@ -109,7 +109,7 @@ pip install -r requirements.txt
 
 ---
 
-## ▶️ Run
+## ▶Run
 
 ```bash
 streamlit run app.py
@@ -117,7 +117,7 @@ streamlit run app.py
 
 ---
 
-## 🧩 Key Concepts
+## Key Concepts
 
 - Classical computer vision fundamentals
 - Deep learning-based inference (OpenCV DNN)
@@ -128,7 +128,7 @@ streamlit run app.py
 
 ---
 
-## 🔮 Future Work
+## Future Work
 
 - YOLO object detection integration
 - Face recognition (identity-level system)
@@ -138,7 +138,7 @@ streamlit run app.py
 
 ---
 
-## 👤 Author
+## Author
 
 Built by: Hubert Kuo  
 Focus: Computer Vision / AI Systems / Machine Learning
