@@ -1,6 +1,6 @@
 # AI_Vision_Lab
 
-> A modular computer vision system combining classical image processing and deep learning-based face detection.
+> A modular computer vision workbench combining classical image processing, deep learning detection, and structured analysis output.
 
 ---
 
@@ -10,8 +10,10 @@ AI_Vision_Lab is an interactive computer vision playground that integrates:
 
 - Classical OpenCV image processing
 - AI-based face detection (Haar / DNN)
+- YOLO object detection with tunable inference parameters
+- Vision Workbench with before/after comparison, run history, and JSON export
 - Real-time webcam inference
-- Dynamic model switching system
+- Dynamic pipeline switching through a registry layer
 
 The goal is to demonstrate a **modular AI vision architecture**, not just isolated scripts.
 
@@ -29,30 +31,38 @@ The goal is to demonstrate a **modular AI vision architecture**, not just isolat
 ### AI Face Detection
 - Haar Cascade face detection
 - Deep learning-based DNN face detection
-- Confidence threshold tuning
+- YOLOv8 object detection (`yolov8n.pt`)
+- Confidence / IoU / max-detection tuning
+- Structured bounding-box annotations and metrics
+- Category-based pipeline selection (`Image Processing` / `AI Vision`)
+- Before/after comparison, run history, and JSON export
 
 ### Real-time Webcam
 - Live video processing
-- Real-time face detection
-- Model switching (Haar / DNN)
+- Real-time DNN face detection
+- Mirror preview in Streamlit
 
 ---
 
 ## System Design
 
 ```
-Streamlit UI
+Streamlit UI (Workbench / Webcam)
    ↓
-Model Selector
+Category + Pipeline Selector
    ↓
-model_registry.py
+model_registry.py (VisionPipeline registry)
    ↓
-OpenCV / DNN pipelines
+OpenCV / DNN / YOLO pipelines
    ↓
-Processed output
+PipelineResult (image + annotations + metrics)
+   ↓
+history_store.py (SQLite + saved images)
+   ↓
+Processed output + JSON export
 ```
 
-Key idea: separation of UI, logic, and model pipelines for scalability.
+Key idea: separation of UI, pipeline registry, inference modules, and persisted run history for scalability.
 
 ---
 
@@ -63,11 +73,16 @@ AI_Vision_Lab/
 │
 ├── app.py
 ├── requirements.txt
+├── yolov8n.pt
 │
 ├── assets/
 │   ├── face_detection.png
 │   ├── image_processing.png
 │   └── webcam.png
+│
+├── data/
+│   ├── vision_history.sqlite
+│   └── history_images/
 │
 ├── models/
 │   ├── deploy.prototxt
@@ -80,8 +95,10 @@ AI_Vision_Lab/
     ├── morphology.py
     ├── haar_face_detection.py
     ├── dnn_face_detection.py
-    ├── model_registry.py
-    └── webcam_runner.py
+    ├── yolo_detection.py
+    ├── pipeline_result.py
+    ├── history_store.py
+    └── model_registry.py
 ```
 
 ---
@@ -102,10 +119,12 @@ AI_Vision_Lab/
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/AI_Vision_Lab.git
-cd AI_Vision_Lab
+git clone https://github.com/hubertkuo418/opencv-image-toolkit.git
+cd opencv-image-toolkit
 pip install -r requirements.txt
 ```
+
+> On first YOLO run, Ultralytics may download model weights if `yolov8n.pt` is not present locally.
 
 ---
 
@@ -115,26 +134,30 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
+Open the sidebar to switch between **Vision Workbench** and **Webcam**.
+
 ---
 
 ## Key Concepts
 
 - Classical computer vision fundamentals
-- Deep learning-based inference (OpenCV DNN)
+- Deep learning-based inference (OpenCV DNN + YOLO)
+- Structured pipeline results (`PipelineResult`)
 - Real-time video processing pipeline
 - Modular architecture design
-- Model abstraction layer
-- UI + backend separation
+- Model abstraction layer (`VisionPipeline` registry)
+- UI + backend + persistence separation
+- Analysis history and exportable JSON artifacts
 
 ---
 
 ## Future Work
 
-- YOLO object detection integration
 - Face recognition (identity-level system)
 - FPS / performance monitoring
 - Snapshot & recording system
-- UI redesign (dashboard-style interface)
+- Webcam pipeline switching (Haar / YOLO)
+- Batch image analysis and dataset export
 
 ---
 

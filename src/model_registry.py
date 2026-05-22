@@ -8,6 +8,7 @@ from src.haar_face_detection import detect_face_annotations_haar, detect_faces_h
 from src.histogram import equalize
 from src.morphology import dilate, erode
 from src.pipeline_result import PipelineResult
+from src.yolo_detection import detect_objects_yolo
 
 
 @dataclass(frozen=True)
@@ -129,12 +130,29 @@ def _face_detection_dnn(img, params):
     )
 
 
-def _placeholder_yolo(img, params):
+def _object_detection_yolo(img, params):
+    conf_threshold = float(params.get("conf_threshold", 0.35))
+    iou_threshold = float(params.get("iou_threshold", 0.5))
+    max_det = int(params.get("max_det", 100))
+    annotated, annotations, model_name = detect_objects_yolo(
+        img,
+        conf_threshold=conf_threshold,
+        iou_threshold=iou_threshold,
+        max_det=max_det,
+    )
+
     return PipelineResult(
-        image=img,
-        labels=[],
-        metrics={"detections": 0},
-        messages=["YOLO object detection is reserved for a future model integration."],
+        image=annotated,
+        annotations=annotations,
+        labels=sorted({annotation.label for annotation in annotations}),
+        metrics={
+            "detections": len(annotations),
+            "confidence_threshold": conf_threshold,
+            "iou_threshold": iou_threshold,
+            "max_detections": max_det,
+            "model": model_name,
+        },
+        messages=[f"Detected {len(annotations)} object(s) with {model_name}."],
     )
 
 
@@ -218,9 +236,13 @@ PIPELINES = (
         name="Object Detection (YOLO)",
         category="AI Vision",
         task_type="Object Detection",
-        description="Reserved pipeline slot for a future YOLO detector.",
-        runner=_placeholder_yolo,
-        status="placeholder",
+        description="Detect common objects with a lightweight YOLO model.",
+        runner=_object_detection_yolo,
+        params=(
+            ParamSpec("conf_threshold", "Confidence Threshold", "float", 0.35, 0.05, 0.95, 0.05),
+            ParamSpec("iou_threshold", "IoU Threshold", "float", 0.5, 0.1, 0.9, 0.05),
+            ParamSpec("max_det", "Max Detections", "int", 100, 1, 300, 1),
+        ),
     ),
 )
 

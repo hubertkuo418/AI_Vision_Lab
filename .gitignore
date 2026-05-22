@@ -221,3 +221,6 @@ __marimo__/
 data/vision_history.sqlite
 data/vision_history.sqlite-*
 data/history_images/
+
+# Downloaded model weights
+*.pt
