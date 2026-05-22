@@ -6,9 +6,11 @@ from src.edges import canny_edge
 from src.filters import gaussian_blur, to_gray
 from src.haar_face_detection import detect_face_annotations_haar, detect_faces_haar
 from src.histogram import equalize
+from src.model_paths import pipeline_status, weights_available
 from src.morphology import dilate, erode
 from src.pipeline_result import PipelineResult
 from src.yolo_detection import detect_objects_yolo
+from src.yunet_face_detection import detect_face_annotations_yunet, detect_faces_yunet
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,18 @@ class VisionPipeline:
     model_family: str = "opencv_classic"
     model_version: str = "default"
     weights_path: str | None = None
+    needs_warmup: bool = False
+
+
+FACE_CONF_PARAM = (
+    ParamSpec("conf_threshold", "Confidence Threshold", "float", 0.5, 0.1, 0.9, 0.05),
+)
+
+YOLO_PARAM_SPECS = (
+    ParamSpec("conf_threshold", "Confidence Threshold", "float", 0.35, 0.05, 0.95, 0.05),
+    ParamSpec("iou_threshold", "IoU Threshold", "float", 0.5, 0.1, 0.9, 0.05),
+    ParamSpec("max_det", "Max Detections", "int", 100, 1, 300, 1),
+)
 
 
 def _gray(img, params):
@@ -110,54 +124,86 @@ def _erode(img, params):
     )
 
 
-def _face_detection_haar(img, params):
-    annotations = detect_face_annotations_haar(img)
-    result = detect_faces_haar(img)
-    return PipelineResult(
-        image=result,
-        annotations=annotations,
-        labels=sorted({annotation.label for annotation in annotations}),
-        metrics={"detections": len(annotations)},
-        messages=[f"Detected {len(annotations)} face(s)."],
-    )
+def _make_face_runner(backend):
+    def _runner(img, params):
+        threshold = float(params.get("conf_threshold", 0.5))
+
+        if backend == "haar":
+            annotations = detect_face_annotations_haar(img)
+            result = detect_faces_haar(img)
+        elif backend == "dnn":
+            annotations = detect_face_annotations_dnn(img, threshold)
+            result = detect_faces_dnn(img, threshold)
+        elif backend == "yunet":
+            annotations = detect_face_annotations_yunet(img, threshold)
+            result = detect_faces_yunet(img, threshold)
+        else:
+            raise ValueError(f"Unknown face backend: {backend}")
+
+        return PipelineResult(
+            image=result,
+            annotations=annotations,
+            labels=sorted({annotation.label for annotation in annotations}),
+            metrics={"detections": len(annotations), "confidence_threshold": threshold},
+            messages=[f"Detected {len(annotations)} face(s)."],
+        )
+
+    return _runner
 
 
-def _face_detection_dnn(img, params):
-    threshold = float(params.get("conf_threshold", 0.5))
-    annotations = detect_face_annotations_dnn(img, threshold)
-    result = detect_faces_dnn(img, threshold)
-    return PipelineResult(
-        image=result,
-        annotations=annotations,
-        labels=sorted({annotation.label for annotation in annotations}),
-        metrics={"detections": len(annotations), "confidence_threshold": threshold},
-        messages=[f"Detected {len(annotations)} face(s)."],
-    )
+def _make_yolo_runner(weights_path, model_version):
+    def _runner(img, params):
+        conf_threshold = float(params.get("conf_threshold", 0.35))
+        iou_threshold = float(params.get("iou_threshold", 0.5))
+        max_det = int(params.get("max_det", 100))
+        annotated, annotations, model_name = detect_objects_yolo(
+            img,
+            weights_path=weights_path,
+            conf_threshold=conf_threshold,
+            iou_threshold=iou_threshold,
+            max_det=max_det,
+        )
+
+        return PipelineResult(
+            image=annotated,
+            annotations=annotations,
+            labels=sorted({annotation.label for annotation in annotations}),
+            metrics={
+                "detections": len(annotations),
+                "confidence_threshold": conf_threshold,
+                "iou_threshold": iou_threshold,
+                "max_detections": max_det,
+                "model": model_name,
+                "model_version": model_version,
+            },
+            messages=[f"Detected {len(annotations)} object(s) with {model_name}."],
+        )
+
+    return _runner
 
 
-def _object_detection_yolo(img, params):
-    conf_threshold = float(params.get("conf_threshold", 0.35))
-    iou_threshold = float(params.get("iou_threshold", 0.5))
-    max_det = int(params.get("max_det", 100))
-    annotated, annotations, model_name = detect_objects_yolo(
-        img,
-        conf_threshold=conf_threshold,
-        iou_threshold=iou_threshold,
-        max_det=max_det,
-    )
-
-    return PipelineResult(
-        image=annotated,
-        annotations=annotations,
-        labels=sorted({annotation.label for annotation in annotations}),
-        metrics={
-            "detections": len(annotations),
-            "confidence_threshold": conf_threshold,
-            "iou_threshold": iou_threshold,
-            "max_detections": max_det,
-            "model": model_name,
-        },
-        messages=[f"Detected {len(annotations)} object(s) with {model_name}."],
+def _yolo_pipeline(
+    pipeline_id,
+    name,
+    weights_path,
+    model_version,
+    description=None,
+):
+    description = description or f"Detect common objects with YOLOv8{model_version}."
+    return VisionPipeline(
+        id=pipeline_id,
+        name=name,
+        category="AI Vision",
+        task_type="Object Detection",
+        description=description,
+        runner=_make_yolo_runner(weights_path, model_version),
+        comparison_group="object_detection",
+        params=YOLO_PARAM_SPECS,
+        status=pipeline_status(weights_path),
+        model_family="yolov8",
+        model_version=model_version,
+        weights_path=weights_path,
+        needs_warmup=True,
     )
 
 
@@ -180,9 +226,7 @@ PIPELINES = (
         description="Smooth the image with a configurable Gaussian kernel.",
         runner=_gaussian_blur,
         comparison_group="denoising",
-        params=(
-            ParamSpec("ksize", "Kernel Size", "int", 9, 1, 21, 2),
-        ),
+        params=(ParamSpec("ksize", "Kernel Size", "int", 9, 1, 21, 2),),
         model_family="opencv_classic",
     ),
     VisionPipeline(
@@ -235,7 +279,7 @@ PIPELINES = (
         category="AI Vision",
         task_type="Face Detection",
         description="Detect frontal faces using OpenCV Haar Cascade.",
-        runner=_face_detection_haar,
+        runner=_make_face_runner("haar"),
         comparison_group="face_detection",
         model_family="opencv_haar",
     ),
@@ -245,36 +289,70 @@ PIPELINES = (
         category="AI Vision",
         task_type="Face Detection",
         description="Detect faces using the OpenCV DNN SSD face detector.",
-        runner=_face_detection_dnn,
+        runner=_make_face_runner("dnn"),
         comparison_group="face_detection",
-        params=(
-            ParamSpec("conf_threshold", "Confidence Threshold", "float", 0.5, 0.1, 0.9, 0.05),
-        ),
+        params=FACE_CONF_PARAM,
+        status=pipeline_status("models/res10_300x300_ssd_iter_140000.caffemodel"),
         model_family="opencv_dnn",
-        weights_path="models/res10_300x300_ssd.caffemodel",
+        model_version="ssd_300",
+        weights_path="models/res10_300x300_ssd_iter_140000.caffemodel",
     ),
     VisionPipeline(
-        id="object_detection_yolo",
-        name="Object Detection (YOLO)",
+        id="face_detection_yunet",
+        name="Face Detection (YuNet)",
         category="AI Vision",
-        task_type="Object Detection",
-        description="Detect common objects with a lightweight YOLO model.",
-        runner=_object_detection_yolo,
-        comparison_group="object_detection",
-        params=(
-            ParamSpec("conf_threshold", "Confidence Threshold", "float", 0.35, 0.05, 0.95, 0.05),
-            ParamSpec("iou_threshold", "IoU Threshold", "float", 0.5, 0.1, 0.9, 0.05),
-            ParamSpec("max_det", "Max Detections", "int", 100, 1, 300, 1),
-        ),
-        model_family="yolov8",
-        model_version="n",
-        weights_path="yolov8n.pt",
+        task_type="Face Detection",
+        description="Detect faces using OpenCV YuNet ONNX detector.",
+        runner=_make_face_runner("yunet"),
+        comparison_group="face_detection",
+        params=FACE_CONF_PARAM,
+        status=pipeline_status("models/face_detection_yunet_2023mar.onnx"),
+        model_family="opencv_yunet",
+        model_version="2023mar",
+        weights_path="models/face_detection_yunet_2023mar.onnx",
+    ),
+    _yolo_pipeline(
+        "object_detection_yolov8n",
+        "Object Detection (YOLOv8n)",
+        "yolov8n.pt",
+        "n",
+    ),
+    _yolo_pipeline(
+        "object_detection_yolov8s",
+        "Object Detection (YOLOv8s)",
+        "yolov8s.pt",
+        "s",
+    ),
+    _yolo_pipeline(
+        "object_detection_yolov8m",
+        "Object Detection (YOLOv8m)",
+        "yolov8m.pt",
+        "m",
     ),
 )
 
 
 PIPELINE_BY_ID = {pipeline.id: pipeline for pipeline in PIPELINES}
 PIPELINE_BY_NAME = {pipeline.name: pipeline for pipeline in PIPELINES}
+
+# Backward-compatible alias for saved history entries.
+PIPELINE_BY_ID["object_detection_yolo"] = PIPELINE_BY_ID["object_detection_yolov8n"]
+_legacy_yolo = VisionPipeline(
+    id="object_detection_yolo",
+    name="Object Detection (YOLO)",
+    category=PIPELINE_BY_ID["object_detection_yolov8n"].category,
+    task_type=PIPELINE_BY_ID["object_detection_yolov8n"].task_type,
+    description="Legacy alias for YOLOv8n object detection.",
+    runner=PIPELINE_BY_ID["object_detection_yolov8n"].runner,
+    comparison_group="object_detection",
+    params=YOLO_PARAM_SPECS,
+    status=PIPELINE_BY_ID["object_detection_yolov8n"].status,
+    model_family="yolov8",
+    model_version="n",
+    weights_path="yolov8n.pt",
+    needs_warmup=True,
+)
+PIPELINE_BY_NAME["Object Detection (YOLO)"] = _legacy_yolo
 
 
 def list_pipelines(category=None):
@@ -291,8 +369,10 @@ def list_categories():
     return seen
 
 
-def list_comparable_pipelines(group=None):
+def list_comparable_pipelines(group=None, only_ready=False):
     pipelines = [pipeline for pipeline in PIPELINES if pipeline.comparable]
+    if only_ready:
+        pipelines = [pipeline for pipeline in pipelines if pipeline.status == "ready"]
     if group is None:
         return pipelines
     return [pipeline for pipeline in pipelines if pipeline.comparison_group == group]
@@ -324,6 +404,10 @@ def get_pipeline(identifier):
 
 def run_pipeline(identifier, img, params=None):
     pipeline = get_pipeline(identifier)
+    if pipeline.status == "missing_weights":
+        raise FileNotFoundError(
+            f"Pipeline '{pipeline.name}' is missing weights at {pipeline.weights_path}."
+        )
     if params is None:
         params = {}
     result = pipeline.runner(img, params)
@@ -334,3 +418,7 @@ def run_pipeline(identifier, img, params=None):
 
 def run_model(model_name, img, params=None):
     return run_pipeline(model_name, img, params).image
+
+
+def weights_status(weights_path):
+    return "available" if weights_available(weights_path) else "missing"

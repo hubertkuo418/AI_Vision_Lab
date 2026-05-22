@@ -1,5 +1,3 @@
-import csv
-import io
 import json
 
 import cv2
@@ -7,20 +5,31 @@ import numpy as np
 import streamlit as st
 from PIL import Image
 
-from src.benchmark_runner import benchmark_leaderboard_rows, run_benchmark
+from src.benchmark_runner import (
+    BenchmarkOptions,
+    benchmark_leaderboard_rows,
+    benchmark_per_image_rows,
+    benchmark_to_export_dict,
+    run_benchmark,
+)
 from src.comparison_runner import MAX_PIPELINES_PER_COMPARE, run_comparison
 from src.dnn_face_detection import detect_faces_dnn
-from src.ground_truth import parse_ground_truth_file
+from src.ground_truth import build_ground_truth_report, ground_truth_template_json, parse_ground_truth_file, parse_ground_truth_payload
 from src.history_store import (
     clear_analysis_runs,
+    clear_benchmark_sessions,
     clear_comparison_sessions,
     comparison_session_to_csv,
     comparison_session_to_export,
     init_history_db,
     list_analysis_runs,
+    list_benchmark_sessions,
     list_comparison_sessions,
+    restore_benchmark_result,
     save_analysis_run,
+    save_benchmark_session,
     save_comparison_session,
+    benchmark_session_to_csv,
 )
 from src.metrics_utils import DETECTION_GROUPS
 from src.model_registry import (
@@ -31,6 +40,7 @@ from src.model_registry import (
     list_comparable_pipelines,
     list_pipelines,
     run_pipeline,
+    weights_status,
 )
 
 
@@ -51,6 +61,8 @@ def init_state():
         "comparison_original": None,
         "selected_compare_history": None,
         "benchmark_result": None,
+        "benchmark_history": list_benchmark_sessions(),
+        "selected_benchmark_history": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -239,7 +251,9 @@ def render_comparison_metrics(entries, comparison_group):
 
 def render_history():
     st.sidebar.markdown("### History")
-    history_tab, compare_tab = st.sidebar.tabs(["Single Runs", "Compare Sessions"])
+    history_tab, compare_tab, benchmark_tab = st.sidebar.tabs(
+        ["Single Runs", "Compare Sessions", "Benchmark Sessions"]
+    )
 
     with history_tab:
         if not st.session_state.history:
@@ -283,6 +297,29 @@ def render_history():
                         st.session_state.selected_compare_history = item["id"]
                         st.session_state.comparison_original = item["original"]
                         st.session_state.comparison_result = item
+                        st.rerun()
+
+    with benchmark_tab:
+        if not st.session_state.benchmark_history:
+            st.sidebar.caption("No benchmark sessions yet.")
+        else:
+            if st.sidebar.button("Clear Benchmark Sessions", use_container_width=True, key="clear_benchmark"):
+                clear_benchmark_sessions()
+                st.session_state.benchmark_history = []
+                st.session_state.selected_benchmark_history = None
+                st.session_state.benchmark_result = None
+                st.rerun()
+
+            for index, item in enumerate(st.session_state.benchmark_history):
+                label = (
+                    f"{item['comparison_group']} · {item['image_count']} images · "
+                    f"{len(item['pipeline_ids'])} models"
+                )
+                with st.sidebar.expander(label, expanded=index == 0):
+                    st.caption(item["time"])
+                    if st.button("Open Session", key=f"open_benchmark_{item['id']}", use_container_width=True):
+                        st.session_state.selected_benchmark_history = item["id"]
+                        st.session_state.benchmark_result = restore_benchmark_result(item)
                         st.rerun()
 
 
@@ -420,8 +457,10 @@ def render_compare():
         )
         groups = list_comparison_groups()
         selected_group = st.selectbox("Comparison Group", groups)
-        pipelines = list_comparable_pipelines(selected_group)
+        pipelines = list_comparable_pipelines(selected_group, only_ready=True)
         pipeline_options = {pipeline.name: pipeline.id for pipeline in pipelines}
+        if not pipeline_options:
+            st.warning("No ready pipelines in this group. Check Model Catalog for missing weights.")
         selected_names = st.multiselect(
             "Pipelines",
             list(pipeline_options.keys()),
@@ -530,94 +569,215 @@ def render_compare():
         )
 
 
-def render_benchmark():
-    st.title("Benchmark")
-    apply_global_styles()
-    st.caption("Batch-evaluate pipelines across multiple images. Optional ground truth unlocks precision/recall/F1.")
+def _benchmark_sort_options(rows):
+    if not rows:
+        return ["avg_latency_ms"]
+    sample = rows[0]
+    preferred = [
+        "micro_f1",
+        "macro_f1",
+        "f1",
+        "avg_latency_ms",
+        "avg_detections",
+        "avg_pixel_change_ratio",
+    ]
+    return [key for key in preferred if key in sample]
 
-    uploaded_files = st.file_uploader(
-        "Upload Images",
-        type=["jpg", "jpeg", "png"],
-        accept_multiple_files=True,
-        key="benchmark_upload",
-    )
-    gt_file = st.file_uploader(
-        "Optional Ground Truth JSON",
-        type=["json"],
-        key="benchmark_gt",
-    )
 
-    groups = list_comparison_groups()
-    selected_group = st.selectbox("Benchmark Group", groups, key="benchmark_group")
-    pipelines = list_comparable_pipelines(selected_group)
-    pipeline_options = {pipeline.name: pipeline.id for pipeline in pipelines}
-    selected_names = st.multiselect(
-        "Pipelines",
-        list(pipeline_options.keys()),
-        default=list(pipeline_options.keys()),
-        key="benchmark_pipelines",
-    )
-    selected_ids = [pipeline_options[name] for name in selected_names]
-    iou_threshold = st.slider("Ground-truth IoU threshold", 0.1, 0.9, 0.5, 0.05)
+def _split_leaderboard_rows(rows):
+    detection_rows = [row for row in rows if row.get("metric_template") == "detection"]
+    processing_rows = [row for row in rows if row.get("metric_template") != "detection"]
+    return detection_rows, processing_rows
 
-    run_benchmark_btn = st.button(
-        "Run Benchmark",
-        type="primary",
-        disabled=not uploaded_files or not selected_ids,
+
+def render_benchmark_results(result):
+    sort_options = _benchmark_sort_options(benchmark_leaderboard_rows(result))
+    sort_by = st.selectbox("Sort leaderboard by", sort_options, key="benchmark_sort_by")
+    descending = st.checkbox("Descending order", value=sort_by not in {"avg_latency_ms"}, key="benchmark_sort_desc")
+    rows = benchmark_leaderboard_rows(result, sort_by=sort_by, descending=descending)
+    detection_rows, processing_rows = _split_leaderboard_rows(rows)
+
+    if result.warmup_applied:
+        st.caption("YOLO warmup was applied before timed runs.")
+
+    if result.has_ground_truth and result.ground_truth_report:
+        report = result.ground_truth_report
+        st.markdown("**Ground truth coverage**")
+        st.write(
+            f"Matched {report.get('matched_count', 0)} / {report.get('image_count', 0)} images."
+        )
+        if report.get("missing_gt_images"):
+            st.warning("Missing GT for: " + ", ".join(report["missing_gt_images"]))
+        if report.get("unused_gt_keys"):
+            st.info("Unused GT keys: " + ", ".join(report["unused_gt_keys"]))
+
+    st.subheader("Leaderboard")
+    if detection_rows:
+        st.markdown("**Detection models**")
+        st.dataframe(detection_rows, use_container_width=True, hide_index=True)
+    if processing_rows:
+        st.markdown("**Processing models**")
+        st.dataframe(processing_rows, use_container_width=True, hide_index=True)
+    if not detection_rows and not processing_rows:
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+
+    st.subheader("Per-image metrics")
+    for summary in result.summaries:
+        with st.expander(summary.pipeline_name, expanded=False):
+            per_image_rows = []
+            for image_result in summary.per_image:
+                row = {
+                    "file_name": image_result.file_name,
+                    "latency_ms": image_result.metrics.get("latency_ms"),
+                }
+                if image_result.metric_template == "detection":
+                    row["detections"] = image_result.metrics.get("detections")
+                    row["avg_confidence"] = image_result.metrics.get("avg_confidence")
+                    if image_result.evaluation:
+                        row["precision"] = image_result.evaluation.get("precision")
+                        row["recall"] = image_result.evaluation.get("recall")
+                        row["f1"] = image_result.evaluation.get("f1")
+                else:
+                    row["pixel_change_ratio"] = image_result.metrics.get("pixel_change_ratio")
+                    row["edge_pixels"] = image_result.metrics.get("edge_pixels")
+                per_image_rows.append(row)
+            st.dataframe(per_image_rows, use_container_width=True, hide_index=True)
+
+    export_payload = benchmark_to_export_dict(result)
+    st.download_button(
+        "Download Full Benchmark JSON",
+        data=json.dumps(export_payload, indent=2),
+        file_name="benchmark_session.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    st.download_button(
+        "Download Leaderboard CSV",
+        data=benchmark_session_to_csv({"leaderboard": rows, "per_image": []}),
+        file_name="benchmark_leaderboard.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    st.download_button(
+        "Download Per-image CSV",
+        data=benchmark_session_to_csv(
+            {"leaderboard": [], "per_image": benchmark_per_image_rows(result)},
+            per_image=True,
+        ),
+        file_name="benchmark_per_image.csv",
+        mime="text/csv",
         use_container_width=True,
     )
 
-    if run_benchmark_btn and uploaded_files:
-        images = {uploaded.name: image_to_array(uploaded) for uploaded in uploaded_files}
-        ground_truth = parse_ground_truth_file(gt_file) if gt_file is not None else None
 
-        with st.spinner("Running benchmark..."):
+def render_benchmark():
+    st.title("Benchmark")
+    apply_global_styles()
+    st.caption("Batch-evaluate pipelines across multiple images. Optional ground truth unlocks macro/micro F1.")
+
+    left, right = st.columns([0.34, 0.66], gap="large")
+
+    with left:
+        uploaded_files = st.file_uploader(
+            "Upload Images",
+            type=["jpg", "jpeg", "png"],
+            accept_multiple_files=True,
+            key="benchmark_upload",
+        )
+        st.download_button(
+            "Download GT template",
+            data=ground_truth_template_json(),
+            file_name="ground_truth_template.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+        gt_file = st.file_uploader(
+            "Optional Ground Truth JSON",
+            type=["json"],
+            key="benchmark_gt",
+        )
+
+        groups = list_comparison_groups()
+        selected_group = st.selectbox("Benchmark Group", groups, key="benchmark_group")
+        pipelines = list_comparable_pipelines(selected_group, only_ready=True)
+        pipeline_options = {pipeline.name: pipeline.id for pipeline in pipelines}
+        if not pipeline_options:
+            st.warning("No ready pipelines in this group. Check Model Catalog for missing weights.")
+        selected_names = st.multiselect(
+            "Pipelines",
+            list(pipeline_options.keys()),
+            default=list(pipeline_options.keys()),
+            key="benchmark_pipelines",
+        )
+        selected_ids = [pipeline_options[name] for name in selected_names]
+
+        use_defaults = st.checkbox("Use default parameters", value=True, key="benchmark_use_defaults")
+        params_map = {}
+        if not use_defaults and selected_ids:
+            with st.expander("Per-model parameters"):
+                for pipeline_id in selected_ids:
+                    pipeline = get_pipeline(pipeline_id)
+                    st.markdown(f"**{pipeline.name}**")
+                    params_map[pipeline_id] = build_params(pipeline, key_prefix="benchmark_")
+
+        warmup = st.checkbox("Warmup YOLO before timing", value=True, key="benchmark_warmup")
+        iou_threshold = st.slider("Ground-truth IoU threshold", 0.1, 0.9, 0.5, 0.05)
+
+        if uploaded_files and gt_file is not None:
+            gt_data = parse_ground_truth_file(gt_file)
+            image_names = [uploaded.name for uploaded in uploaded_files]
+            require_gt = any(
+                get_pipeline(pipeline_id).comparison_group in DETECTION_GROUPS
+                for pipeline_id in selected_ids
+            )
+            gt_report = build_ground_truth_report(
+                image_names,
+                gt_data,
+                require_detection_gt=require_gt,
+            )
+            if gt_report.get("missing_gt_images"):
+                st.warning("Missing GT for: " + ", ".join(gt_report["missing_gt_images"]))
+
+        run_benchmark_btn = st.button(
+            "Run Benchmark",
+            type="primary",
+            disabled=not uploaded_files or not selected_ids,
+            use_container_width=True,
+        )
+
+        if run_benchmark_btn and uploaded_files:
+            images = {uploaded.name: image_to_array(uploaded) for uploaded in uploaded_files}
+            ground_truth = parse_ground_truth_file(gt_file) if gt_file is not None else None
+            options = BenchmarkOptions(warmup=warmup, iou_threshold=iou_threshold)
+            progress = st.progress(0.0)
+            status = st.empty()
+
+            def on_progress(current, total, message):
+                progress.progress(current / total)
+                status.caption(f"{current}/{total} · {message}")
+
             benchmark = run_benchmark(
                 images,
                 selected_ids,
                 ground_truth=ground_truth,
-                iou_threshold=iou_threshold,
+                options=options,
                 comparison_group=selected_group,
+                params_map=params_map or None,
+                progress_callback=on_progress,
             )
+            save_benchmark_session(benchmark)
             st.session_state.benchmark_result = benchmark
+            st.session_state.benchmark_history = list_benchmark_sessions()
+            progress.progress(1.0)
+            status.caption("Benchmark complete.")
+            st.success("Benchmark saved to history.")
 
-    result = st.session_state.benchmark_result
-    if result is None:
-        st.info("Upload images and run a benchmark to see the leaderboard.")
-        return
-
-    st.subheader("Leaderboard")
-    rows = benchmark_leaderboard_rows(result)
-    st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    st.download_button(
-        "Download Leaderboard JSON",
-        data=json.dumps(
-            {
-                "created_at": result.created_at,
-                "comparison_group": result.comparison_group,
-                "has_ground_truth": result.has_ground_truth,
-                "leaderboard": rows,
-            },
-            indent=2,
-        ),
-        file_name="benchmark_leaderboard.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-
-    buffer = io.StringIO()
-    if rows:
-        writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-        st.download_button(
-            "Download Leaderboard CSV",
-            data=buffer.getvalue(),
-            file_name="benchmark_leaderboard.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
+    with right:
+        result = st.session_state.benchmark_result
+        if result is None:
+            st.info("Upload images and run a benchmark to see the leaderboard.")
+            return
+        render_benchmark_results(result)
 
 
 def render_catalog():
@@ -626,15 +786,21 @@ def render_catalog():
     st.caption("Registered vision pipelines available for workbench, comparison, and benchmark flows.")
 
     for pipeline in list_comparable_pipelines():
+        status_label = pipeline.status.replace("_", " ")
         with st.expander(f"{pipeline.name} ({pipeline.comparison_group})", expanded=False):
             st.write(pipeline.description)
+            weights_line = pipeline.weights_path or "n/a"
+            if pipeline.weights_path:
+                weights_line = f"{pipeline.weights_path} ({weights_status(pipeline.weights_path)})"
             st.markdown(
                 f"""
                 - **Category:** {pipeline.category}
                 - **Task:** {pipeline.task_type}
                 - **Model family:** {pipeline.model_family}
                 - **Model version:** {pipeline.model_version}
-                - **Weights:** {pipeline.weights_path or "n/a"}
+                - **Weights:** {weights_line}
+                - **Status:** {status_label}
+                - **Warmup:** {pipeline.needs_warmup}
                 - **Comparable:** {pipeline.comparable}
                 """
             )

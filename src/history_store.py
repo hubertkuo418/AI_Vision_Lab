@@ -57,6 +57,24 @@ def init_history_db():
             "CREATE INDEX IF NOT EXISTS idx_comparison_sessions_created_at "
             "ON comparison_sessions(created_at DESC)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS benchmark_sessions (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                comparison_group TEXT NOT NULL,
+                image_count INTEGER NOT NULL,
+                pipeline_ids_json TEXT NOT NULL,
+                has_ground_truth INTEGER NOT NULL,
+                result_json TEXT NOT NULL,
+                leaderboard_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_benchmark_sessions_created_at "
+            "ON benchmark_sessions(created_at DESC)"
+        )
 
 
 def _save_image(image_array, prefix):
@@ -274,9 +292,203 @@ def clear_comparison_sessions():
         conn.execute("DELETE FROM comparison_sessions")
 
 
+def clear_benchmark_sessions():
+    init_history_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM benchmark_sessions")
+
+
 def clear_all_history():
     clear_analysis_runs()
     clear_comparison_sessions()
+    clear_benchmark_sessions()
+
+
+def _benchmark_result_to_storage(benchmark_result):
+    per_image = []
+    for summary in benchmark_result.summaries:
+        for image_result in summary.per_image:
+            per_image.append(
+                {
+                    "pipeline_id": image_result.pipeline_id,
+                    "pipeline_name": image_result.pipeline_name,
+                    "file_name": image_result.file_name,
+                    "comparison_group": image_result.comparison_group,
+                    "metric_template": image_result.metric_template,
+                    "metrics": image_result.metrics,
+                    "evaluation": image_result.evaluation,
+                }
+            )
+
+    from src.benchmark_runner import benchmark_leaderboard_rows, benchmark_to_export_dict
+
+    export_payload = benchmark_to_export_dict(benchmark_result)
+    export_payload["per_image"] = per_image
+    return export_payload
+
+
+def save_benchmark_session(benchmark_result):
+    init_history_db()
+    export_payload = _benchmark_result_to_storage(benchmark_result)
+    leaderboard = export_payload["leaderboard"]
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO benchmark_sessions (
+                id,
+                created_at,
+                comparison_group,
+                image_count,
+                pipeline_ids_json,
+                has_ground_truth,
+                result_json,
+                leaderboard_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                benchmark_result.session_id,
+                benchmark_result.created_at,
+                benchmark_result.comparison_group,
+                benchmark_result.summaries[0].image_count
+                if benchmark_result.summaries
+                else 0,
+                json.dumps(benchmark_result.pipeline_ids),
+                int(benchmark_result.has_ground_truth),
+                json.dumps(export_payload),
+                json.dumps(leaderboard),
+            ),
+        )
+
+    return load_benchmark_session(benchmark_result.session_id)
+
+
+def list_benchmark_sessions(limit=12):
+    init_history_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM benchmark_sessions
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    return [_benchmark_row_to_entry(row) for row in rows]
+
+
+def load_benchmark_session(session_id):
+    init_history_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM benchmark_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return _benchmark_row_to_entry(row)
+
+
+def benchmark_session_to_export(entry):
+    return entry["export"]
+
+
+def benchmark_session_to_csv(entry, *, per_image=False):
+    import csv
+    import io
+
+    buffer = io.StringIO()
+    rows = entry["per_image"] if per_image else entry["leaderboard"]
+    if not rows:
+        return buffer.getvalue()
+
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def _benchmark_row_to_entry(row):
+    export_payload = json.loads(row["result_json"])
+    return {
+        "id": row["id"],
+        "time": row["created_at"],
+        "comparison_group": row["comparison_group"],
+        "image_count": row["image_count"],
+        "pipeline_ids": json.loads(row["pipeline_ids_json"]),
+        "has_ground_truth": bool(row["has_ground_truth"]),
+        "export": export_payload,
+        "leaderboard": json.loads(row["leaderboard_json"]),
+        "per_image": export_payload.get("per_image", []),
+    }
+
+
+def restore_benchmark_result(entry):
+    return _restore_benchmark_result_from_export(entry["export"])
+
+
+def _restore_benchmark_result_from_export(export_payload):
+    from src.benchmark_runner import BenchmarkResult, ImageBenchmarkResult, PipelineBenchmarkSummary
+
+    summaries = []
+    per_image_by_pipeline = {}
+    for row in export_payload.get("per_image", []):
+        per_image_by_pipeline.setdefault(row["pipeline_id"], []).append(
+            ImageBenchmarkResult(
+                file_name=row["file_name"],
+                pipeline_id=row["pipeline_id"],
+                pipeline_name=row["pipeline_name"],
+                comparison_group=row["comparison_group"],
+                metric_template=row["metric_template"],
+                metrics=row["metrics"],
+                evaluation=row.get("evaluation"),
+            )
+        )
+
+    for summary_data in export_payload.get("summaries", []):
+        pipeline_id = summary_data["pipeline_id"]
+        summaries.append(
+            PipelineBenchmarkSummary(
+                pipeline_id=pipeline_id,
+                pipeline_name=summary_data["pipeline_name"],
+                comparison_group=summary_data["comparison_group"],
+                metric_template=summary_data["metric_template"],
+                image_count=summary_data["image_count"],
+                avg_latency_ms=summary_data["avg_latency_ms"],
+                latency_std_ms=summary_data["latency_std_ms"],
+                detections_std=summary_data.get("detections_std"),
+                avg_detections=summary_data.get("avg_detections"),
+                avg_confidence=summary_data.get("avg_confidence"),
+                macro_precision=summary_data.get("macro_precision"),
+                macro_recall=summary_data.get("macro_recall"),
+                macro_f1=summary_data.get("macro_f1"),
+                micro_precision=summary_data.get("micro_precision"),
+                micro_recall=summary_data.get("micro_recall"),
+                micro_f1=summary_data.get("micro_f1"),
+                avg_pixel_change_ratio=summary_data.get("avg_pixel_change_ratio"),
+                avg_edge_pixels=summary_data.get("avg_edge_pixels"),
+                per_image=per_image_by_pipeline.get(pipeline_id, []),
+            )
+        )
+
+    return BenchmarkResult(
+        session_id=export_payload["session_id"],
+        created_at=export_payload["created_at"],
+        comparison_group=export_payload["comparison_group"],
+        has_ground_truth=export_payload["has_ground_truth"],
+        warmup_applied=export_payload.get("warmup_applied", False),
+        ground_truth_report=export_payload.get("ground_truth_report", {}),
+        pipeline_ids=export_payload.get("pipeline_ids", []),
+        params_map=export_payload.get("params_map", {}),
+        summaries=summaries,
+    )
 
 
 def comparison_session_to_export(entry):

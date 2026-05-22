@@ -135,3 +135,87 @@ def classification_scores(true_positives, false_positives, false_negatives):
 def evaluate_predictions(predictions, ground_truth, iou_threshold=0.5):
     counts = match_predictions(predictions, ground_truth, iou_threshold=iou_threshold)
     return classification_scores(*counts)
+
+
+def aggregate_evaluations(evaluations):
+    """Micro-average precision/recall/F1 across all images."""
+    if not evaluations:
+        return None
+
+    total_tp = sum(item["true_positives"] for item in evaluations)
+    total_fp = sum(item["false_positives"] for item in evaluations)
+    total_fn = sum(item["false_negatives"] for item in evaluations)
+    return classification_scores(total_tp, total_fp, total_fn)
+
+
+def macro_average_evaluations(evaluations):
+    """Macro-average per-image precision/recall/F1."""
+    if not evaluations:
+        return None
+
+    return {
+        "precision": round(mean_score(evaluations, "precision"), 4),
+        "recall": round(mean_score(evaluations, "recall"), 4),
+        "f1": round(mean_score(evaluations, "f1"), 4),
+    }
+
+
+def mean_score(evaluations, key):
+    return sum(item[key] for item in evaluations) / len(evaluations)
+
+
+def build_ground_truth_report(image_names, gt_data, require_detection_gt=False):
+    """Summarize which uploaded images have ground-truth labels."""
+    if gt_data is None:
+        return {
+            "has_ground_truth": False,
+            "matched_images": [],
+            "missing_gt_images": list(image_names) if require_detection_gt else [],
+            "unused_gt_keys": [],
+            "image_count": len(image_names),
+            "matched_count": 0,
+        }
+
+    matched_images = []
+    missing_gt_images = []
+    image_set = set(image_names)
+
+    for file_name in image_names:
+        boxes = []
+        if file_name in gt_data:
+            boxes = gt_data[file_name]
+        elif "default" in gt_data:
+            boxes = gt_data["default"]
+        if boxes:
+            matched_images.append(file_name)
+        elif require_detection_gt:
+            missing_gt_images.append(file_name)
+
+    unused_gt_keys = [
+        key
+        for key in gt_data.keys()
+        if key != "default" and key not in image_set
+    ]
+
+    return {
+        "has_ground_truth": True,
+        "matched_images": matched_images,
+        "missing_gt_images": missing_gt_images,
+        "unused_gt_keys": unused_gt_keys,
+        "image_count": len(image_names),
+        "matched_count": len(matched_images),
+    }
+
+
+def ground_truth_template_json():
+    return json.dumps(
+        {
+            "photo.jpg": [
+                {"label": "face", "x": 120, "y": 80, "width": 64, "height": 64}
+            ],
+            "default": [
+                {"label": "person", "x": 40, "y": 30, "width": 120, "height": 200}
+            ],
+        },
+        indent=2,
+    )

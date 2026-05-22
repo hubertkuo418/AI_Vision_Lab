@@ -16,8 +16,9 @@ def test_run_comparison_face_detection_group():
     image = _sample_image()
     pipeline_ids = [
         pipeline.id
-        for pipeline in list_comparable_pipelines("face_detection")
+        for pipeline in list_comparable_pipelines("face_detection", only_ready=True)
     ]
+    assert pipeline_ids
 
     result = run_comparison(
         image,

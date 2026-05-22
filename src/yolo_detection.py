@@ -4,13 +4,11 @@ import numpy as np
 from src.pipeline_result import Annotation, BoundingBox
 
 
-_YOLO_MODEL = None
+_YOLO_MODELS = {}
 
 
-def _load_model():
-    global _YOLO_MODEL
-
-    if _YOLO_MODEL is None:
+def _load_model(weights_path="yolov8n.pt"):
+    if weights_path not in _YOLO_MODELS:
         try:
             from ultralytics import YOLO
         except ImportError as exc:
@@ -19,14 +17,21 @@ def _load_model():
                 "Install project dependencies with: pip install -r requirements.txt"
             ) from exc
 
-        _YOLO_MODEL = YOLO("yolov8n.pt")
+        _YOLO_MODELS[weights_path] = YOLO(weights_path)
 
-    return _YOLO_MODEL
+    return _YOLO_MODELS[weights_path]
 
 
-def detect_objects_yolo(img, conf_threshold=0.35, iou_threshold=0.5, max_det=100):
+def detect_objects_yolo(
+    img,
+    *,
+    weights_path="yolov8n.pt",
+    conf_threshold=0.35,
+    iou_threshold=0.5,
+    max_det=100,
+):
     """Detect objects with YOLO and return an annotated image plus structured boxes."""
-    model = _load_model()
+    model = _load_model(weights_path)
     predictions = model.predict(
         source=img,
         conf=conf_threshold,
@@ -40,7 +45,7 @@ def detect_objects_yolo(img, conf_threshold=0.35, iou_threshold=0.5, max_det=100
     annotations = []
 
     if result.boxes is None:
-        return annotated, annotations, getattr(model, "model_name", "yolov8n.pt")
+        return annotated, annotations, weights_path
 
     class_names = result.names
     boxes = result.boxes.xyxy.cpu().numpy()
@@ -78,11 +83,10 @@ def detect_objects_yolo(img, conf_threshold=0.35, iou_threshold=0.5, max_det=100
             2,
         )
 
-    return annotated, annotations, "yolov8n.pt"
+    return annotated, annotations, weights_path
 
 
 def _label_color(label):
     seed = sum(ord(char) for char in label)
     rng = np.random.default_rng(seed)
-    # Bright RGB colors that remain visible on photos.
     return tuple(int(value) for value in rng.integers(64, 256, size=3))

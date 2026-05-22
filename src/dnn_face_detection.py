@@ -1,15 +1,13 @@
 import cv2
 import numpy as np
 
+from src.model_paths import MODELS_DIR
 from src.pipeline_result import Annotation, BoundingBox
 
-# Load pre-trained DNN face detection model
-# deploy.prototxt: model architecture definition
-# .caffemodel: pre-trained weights
-net = cv2.dnn.readNetFromCaffe(
-    "models/deploy.prototxt",
-    "models/res10_300x300_ssd_iter_140000.caffemodel"
-)
+DNN_PROTO_PATH = str(MODELS_DIR / "deploy.prototxt")
+DNN_WEIGHTS_PATH = str(MODELS_DIR / "res10_300x300_ssd_iter_140000.caffemodel")
+
+net = cv2.dnn.readNetFromCaffe(DNN_PROTO_PATH, DNN_WEIGHTS_PATH)
 
 
 def detect_face_annotations_dnn(img, conf_threshold=0.3):
