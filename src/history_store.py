@@ -96,6 +96,27 @@ def _load_image(image_path):
     return np.array(image)
 
 
+def _load_entry_or_none(row, converter):
+    try:
+        return converter(row)
+    except FileNotFoundError:
+        return None
+
+
+def _existing_entries(rows, converter):
+    entries = []
+    for row in rows:
+        entry = _load_entry_or_none(row, converter)
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def _delete_image_paths(paths):
+    for image_path in paths:
+        Path(image_path).unlink(missing_ok=True)
+
+
 def save_analysis_run(
     *,
     file_name,
@@ -176,7 +197,7 @@ def list_analysis_runs(limit=12):
             (limit,),
         ).fetchall()
 
-    return [_row_to_entry(row) for row in rows]
+    return _existing_entries(rows, _row_to_entry)
 
 
 def load_analysis_run(run_id):
@@ -191,16 +212,23 @@ def load_analysis_run(run_id):
     if row is None:
         return None
 
-    return _row_to_entry(row)
+    return _load_entry_or_none(row, _row_to_entry)
 
 
 def clear_analysis_runs():
     init_history_db()
     with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT original_image_path, result_image_path FROM analysis_runs"
+        ).fetchall()
         conn.execute("DELETE FROM analysis_runs")
 
-    for image_path in IMAGE_DIR.glob("*.png"):
-        image_path.unlink()
+    _delete_image_paths(
+        path
+        for row in rows
+        for path in (row["original_image_path"], row["result_image_path"])
+    )
 
 
 def save_comparison_session(*, file_name, comparison_group, original_image, comparison_result):
@@ -268,7 +296,7 @@ def list_comparison_sessions(limit=12):
             (limit,),
         ).fetchall()
 
-    return [_comparison_row_to_entry(row) for row in rows]
+    return _existing_entries(rows, _comparison_row_to_entry)
 
 
 def load_comparison_session(session_id):
@@ -283,13 +311,27 @@ def load_comparison_session(session_id):
     if row is None:
         return None
 
-    return _comparison_row_to_entry(row)
+    return _load_entry_or_none(row, _comparison_row_to_entry)
 
 
 def clear_comparison_sessions():
     init_history_db()
     with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT original_image_path, runs_json FROM comparison_sessions"
+        ).fetchall()
         conn.execute("DELETE FROM comparison_sessions")
+
+    image_paths = []
+    for row in rows:
+        image_paths.append(row["original_image_path"])
+        image_paths.extend(
+            run["result_image_path"]
+            for run in json.loads(row["runs_json"])
+            if "result_image_path" in run
+        )
+    _delete_image_paths(image_paths)
 
 
 def clear_benchmark_sessions():
