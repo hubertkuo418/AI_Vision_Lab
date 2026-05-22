@@ -30,8 +30,13 @@ class VisionPipeline:
     task_type: str
     description: str
     runner: Callable
+    comparison_group: str
     params: tuple[ParamSpec, ...] = ()
     status: str = "ready"
+    comparable: bool = True
+    model_family: str = "opencv_classic"
+    model_version: str = "default"
+    weights_path: str | None = None
 
 
 def _gray(img, params):
@@ -164,6 +169,8 @@ PIPELINES = (
         task_type="Color Transform",
         description="Convert the input image to grayscale.",
         runner=_gray,
+        comparison_group="color_transform",
+        model_family="opencv_classic",
     ),
     VisionPipeline(
         id="gaussian_blur",
@@ -172,9 +179,11 @@ PIPELINES = (
         task_type="Denoising",
         description="Smooth the image with a configurable Gaussian kernel.",
         runner=_gaussian_blur,
+        comparison_group="denoising",
         params=(
             ParamSpec("ksize", "Kernel Size", "int", 9, 1, 21, 2),
         ),
+        model_family="opencv_classic",
     ),
     VisionPipeline(
         id="canny_edge",
@@ -183,10 +192,12 @@ PIPELINES = (
         task_type="Edge Detection",
         description="Detect strong image edges with low and high thresholds.",
         runner=_canny_edge,
+        comparison_group="edge_detection",
         params=(
             ParamSpec("low", "Low Threshold", "int", 100, 50, 150, 1),
             ParamSpec("high", "High Threshold", "int", 200, 150, 300, 1),
         ),
+        model_family="opencv_classic",
     ),
     VisionPipeline(
         id="histogram_equalization",
@@ -195,6 +206,8 @@ PIPELINES = (
         task_type="Contrast Enhancement",
         description="Enhance local contrast through grayscale histogram equalization.",
         runner=_histogram_equalization,
+        comparison_group="contrast_enhancement",
+        model_family="opencv_classic",
     ),
     VisionPipeline(
         id="dilate",
@@ -203,6 +216,8 @@ PIPELINES = (
         task_type="Morphology",
         description="Expand bright regions in a grayscale representation.",
         runner=_dilate,
+        comparison_group="morphology",
+        model_family="opencv_classic",
     ),
     VisionPipeline(
         id="erode",
@@ -211,6 +226,8 @@ PIPELINES = (
         task_type="Morphology",
         description="Shrink bright regions in a grayscale representation.",
         runner=_erode,
+        comparison_group="morphology",
+        model_family="opencv_classic",
     ),
     VisionPipeline(
         id="face_detection_haar",
@@ -219,6 +236,8 @@ PIPELINES = (
         task_type="Face Detection",
         description="Detect frontal faces using OpenCV Haar Cascade.",
         runner=_face_detection_haar,
+        comparison_group="face_detection",
+        model_family="opencv_haar",
     ),
     VisionPipeline(
         id="face_detection_dnn",
@@ -227,9 +246,12 @@ PIPELINES = (
         task_type="Face Detection",
         description="Detect faces using the OpenCV DNN SSD face detector.",
         runner=_face_detection_dnn,
+        comparison_group="face_detection",
         params=(
             ParamSpec("conf_threshold", "Confidence Threshold", "float", 0.5, 0.1, 0.9, 0.05),
         ),
+        model_family="opencv_dnn",
+        weights_path="models/res10_300x300_ssd.caffemodel",
     ),
     VisionPipeline(
         id="object_detection_yolo",
@@ -238,11 +260,15 @@ PIPELINES = (
         task_type="Object Detection",
         description="Detect common objects with a lightweight YOLO model.",
         runner=_object_detection_yolo,
+        comparison_group="object_detection",
         params=(
             ParamSpec("conf_threshold", "Confidence Threshold", "float", 0.35, 0.05, 0.95, 0.05),
             ParamSpec("iou_threshold", "IoU Threshold", "float", 0.5, 0.1, 0.9, 0.05),
             ParamSpec("max_det", "Max Detections", "int", 100, 1, 300, 1),
         ),
+        model_family="yolov8",
+        model_version="n",
+        weights_path="yolov8n.pt",
     ),
 )
 
@@ -263,6 +289,29 @@ def list_categories():
         if pipeline.category not in seen:
             seen.append(pipeline.category)
     return seen
+
+
+def list_comparable_pipelines(group=None):
+    pipelines = [pipeline for pipeline in PIPELINES if pipeline.comparable]
+    if group is None:
+        return pipelines
+    return [pipeline for pipeline in pipelines if pipeline.comparison_group == group]
+
+
+def list_comparison_groups():
+    groups = []
+    for pipeline in list_comparable_pipelines():
+        if pipeline.comparison_group not in groups:
+            groups.append(pipeline.comparison_group)
+    return groups
+
+
+def default_params(identifier):
+    pipeline = get_pipeline(identifier)
+    params = {}
+    for spec in pipeline.params:
+        params[spec.name] = spec.default if spec.kind == "int" else float(spec.default)
+    return params
 
 
 def get_pipeline(identifier):

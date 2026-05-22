@@ -40,6 +40,23 @@ def init_history_db():
             "CREATE INDEX IF NOT EXISTS idx_analysis_runs_created_at "
             "ON analysis_runs(created_at DESC)"
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS comparison_sessions (
+                id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                comparison_group TEXT NOT NULL,
+                original_image_path TEXT NOT NULL,
+                runs_json TEXT NOT NULL,
+                summary_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_comparison_sessions_created_at "
+            "ON comparison_sessions(created_at DESC)"
+        )
 
 
 def _save_image(image_array, prefix):
@@ -166,6 +183,176 @@ def clear_analysis_runs():
 
     for image_path in IMAGE_DIR.glob("*.png"):
         image_path.unlink()
+
+
+def save_comparison_session(*, file_name, comparison_group, original_image, comparison_result):
+    init_history_db()
+    session_id = comparison_result.session_id
+    created_at = comparison_result.created_at
+    original_path = _save_image(original_image, "compare_original")
+
+    runs_payload = []
+    for entry in comparison_result.entries:
+        result_path = _save_image(entry.result_image, "compare_result")
+        runs_payload.append(
+            {
+                "pipeline_id": entry.pipeline_id,
+                "pipeline_name": entry.pipeline_name,
+                "comparison_group": entry.comparison_group,
+                "task_type": entry.task_type,
+                "params": entry.params,
+                "metrics": entry.metrics,
+                "messages": entry.messages,
+                "export_data": entry.export_data,
+                "result_image_path": str(result_path),
+            }
+        )
+
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO comparison_sessions (
+                id,
+                created_at,
+                file_name,
+                comparison_group,
+                original_image_path,
+                runs_json,
+                summary_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                created_at,
+                file_name,
+                comparison_group,
+                str(original_path),
+                json.dumps(runs_payload),
+                json.dumps(comparison_result.summary),
+            ),
+        )
+
+    return load_comparison_session(session_id)
+
+
+def list_comparison_sessions(limit=12):
+    init_history_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM comparison_sessions
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    return [_comparison_row_to_entry(row) for row in rows]
+
+
+def load_comparison_session(session_id):
+    init_history_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM comparison_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+
+    if row is None:
+        return None
+
+    return _comparison_row_to_entry(row)
+
+
+def clear_comparison_sessions():
+    init_history_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM comparison_sessions")
+
+
+def clear_all_history():
+    clear_analysis_runs()
+    clear_comparison_sessions()
+
+
+def comparison_session_to_export(entry):
+    return {
+        "session_id": entry["id"],
+        "created_at": entry["time"],
+        "file_name": entry["file_name"],
+        "comparison_group": entry["comparison_group"],
+        "summary": entry["summary"],
+        "runs": [
+            {
+                "pipeline_id": run["pipeline_id"],
+                "pipeline_name": run["pipeline_name"],
+                "comparison_group": run["comparison_group"],
+                "task_type": run["task_type"],
+                "params": run["params"],
+                "metrics": run["metrics"],
+                "messages": run["messages"],
+                "export_data": run["export_data"],
+            }
+            for run in entry["runs"]
+        ],
+    }
+
+
+def comparison_session_to_csv(entry):
+    import csv
+    import io
+
+    buffer = io.StringIO()
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=[
+            "pipeline_name",
+            "comparison_group",
+            "task_type",
+            "latency_ms",
+            "detections",
+            "avg_confidence",
+            "output_channels",
+            "pixel_change_ratio",
+        ],
+    )
+    writer.writeheader()
+    for run in entry["runs"]:
+        metrics = run["metrics"]
+        writer.writerow(
+            {
+                "pipeline_name": run["pipeline_name"],
+                "comparison_group": run["comparison_group"],
+                "task_type": run["task_type"],
+                "latency_ms": metrics.get("latency_ms"),
+                "detections": metrics.get("detections"),
+                "avg_confidence": metrics.get("avg_confidence"),
+                "output_channels": metrics.get("output_channels"),
+                "pixel_change_ratio": metrics.get("pixel_change_ratio"),
+            }
+        )
+    return buffer.getvalue()
+
+
+def _comparison_row_to_entry(row):
+    runs = json.loads(row["runs_json"])
+    for run in runs:
+        run["result"] = _load_image(run["result_image_path"])
+
+    return {
+        "id": row["id"],
+        "time": row["created_at"],
+        "file_name": row["file_name"],
+        "comparison_group": row["comparison_group"],
+        "original": _load_image(row["original_image_path"]),
+        "runs": runs,
+        "summary": json.loads(row["summary_json"]),
+        "original_image_path": row["original_image_path"],
+    }
 
 
 def _row_to_entry(row):

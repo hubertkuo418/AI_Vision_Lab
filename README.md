@@ -1,6 +1,6 @@
 # AI_Vision_Lab
 
-> A modular computer vision workbench combining classical image processing, deep learning detection, and structured analysis output.
+> A modular computer vision workbench for running, comparing, and benchmarking vision pipelines on the same input.
 
 ---
 
@@ -12,6 +12,8 @@ AI_Vision_Lab is an interactive computer vision playground that integrates:
 - AI-based face detection (Haar / DNN)
 - YOLO object detection with tunable inference parameters
 - Vision Workbench with before/after comparison, run history, and JSON export
+- **Model Compare** for side-by-side multi-pipeline evaluation on one image
+- **Benchmark** for batch runs and optional ground-truth metrics
 - Real-time webcam inference
 - Dynamic pipeline switching through a registry layer
 
@@ -37,6 +39,18 @@ The goal is to demonstrate a **modular AI vision architecture**, not just isolat
 - Category-based pipeline selection (`Image Processing` / `AI Vision`)
 - Before/after comparison, run history, and JSON export
 
+### Model Compare
+- Compare up to 4 pipelines on the same uploaded image
+- Comparison groups (`face_detection`, `object_detection`, `edge_detection`, etc.)
+- Side-by-side result grid with detection vs processing metric tabs
+- Latency, detection count, confidence, and pixel-change metrics
+- Saved comparison sessions with JSON/CSV export
+
+### Benchmark
+- Batch evaluation across multiple uploaded images
+- Leaderboard with average latency and detection stats
+- Optional ground-truth JSON for precision / recall / F1 (IoU threshold configurable)
+
 ### Real-time Webcam
 - Live video processing
 - Real-time DNN face detection
@@ -47,11 +61,13 @@ The goal is to demonstrate a **modular AI vision architecture**, not just isolat
 ## System Design
 
 ```
-Streamlit UI (Workbench / Webcam)
+Streamlit UI (Workbench / Compare / Benchmark / Catalog / Webcam)
    ↓
 Category + Pipeline Selector
    ↓
 model_registry.py (VisionPipeline registry)
+   ↓
+comparison_runner.py / benchmark_runner.py
    ↓
 OpenCV / DNN / YOLO pipelines
    ↓
@@ -59,10 +75,10 @@ PipelineResult (image + annotations + metrics)
    ↓
 history_store.py (SQLite + saved images)
    ↓
-Processed output + JSON export
+Processed output + JSON / CSV export
 ```
 
-Key idea: separation of UI, pipeline registry, inference modules, and persisted run history for scalability.
+Key idea: separation of UI, pipeline registry, comparison/benchmark runners, and persisted history for scalability.
 
 ---
 
@@ -74,6 +90,8 @@ AI_Vision_Lab/
 ├── app.py
 ├── requirements.txt
 ├── yolov8n.pt
+├── tests/
+│   └── test_comparison.py
 │
 ├── assets/
 │   ├── face_detection.png
@@ -97,6 +115,10 @@ AI_Vision_Lab/
     ├── dnn_face_detection.py
     ├── yolo_detection.py
     ├── pipeline_result.py
+    ├── metrics_utils.py
+    ├── comparison_runner.py
+    ├── benchmark_runner.py
+    ├── ground_truth.py
     ├── history_store.py
     └── model_registry.py
 ```
@@ -119,8 +141,8 @@ AI_Vision_Lab/
 ## Installation
 
 ```bash
-git clone https://github.com/hubertkuo418/opencv-image-toolkit.git
-cd opencv-image-toolkit
+git clone https://github.com/hubertkuo418/ai-vision-lab.git
+cd ai-vision-lab
 pip install -r requirements.txt
 ```
 
@@ -134,7 +156,19 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Open the sidebar to switch between **Vision Workbench** and **Webcam**.
+Open the sidebar to switch between **Vision Workbench**, **Model Compare**, **Benchmark**, **Model Catalog**, and **Webcam**.
+
+### Ground truth format (Benchmark)
+
+```json
+{
+  "photo.jpg": [
+    {"label": "face", "x": 120, "y": 80, "width": 64, "height": 64}
+  ]
+}
+```
+
+Use a single list instead of a filename map to apply the same boxes to every uploaded image.
 
 ---
 
@@ -143,21 +177,22 @@ Open the sidebar to switch between **Vision Workbench** and **Webcam**.
 - Classical computer vision fundamentals
 - Deep learning-based inference (OpenCV DNN + YOLO)
 - Structured pipeline results (`PipelineResult`)
+- Comparison groups and unified runtime metrics (`latency_ms`, detections, etc.)
 - Real-time video processing pipeline
 - Modular architecture design
 - Model abstraction layer (`VisionPipeline` registry)
 - UI + backend + persistence separation
-- Analysis history and exportable JSON artifacts
+- Single-run history and multi-model comparison sessions
 
 ---
 
 ## Future Work
 
 - Face recognition (identity-level system)
-- FPS / performance monitoring
+- FPS overlay and live performance monitoring in Webcam
 - Snapshot & recording system
-- Webcam pipeline switching (Haar / YOLO)
-- Batch image analysis and dataset export
+- Webcam pipeline switching (Haar / YOLO compare mode)
+- Additional YOLO model sizes (`s`, `m`) in the catalog
 
 ---
 

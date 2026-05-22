@@ -48,6 +48,10 @@ class PipelineResult:
                 "category": pipeline.category,
                 "task_type": pipeline.task_type,
                 "status": pipeline.status,
+                "comparison_group": getattr(pipeline, "comparison_group", None),
+                "model_family": getattr(pipeline, "model_family", None),
+                "model_version": getattr(pipeline, "model_version", None),
+                "weights_path": getattr(pipeline, "weights_path", None),
             },
             "input": {
                 "width": int(width),
