@@ -1,4 +1,4 @@
-from datetime import datetime
+import json
 
 import cv2
 import numpy as np
@@ -6,35 +6,21 @@ import streamlit as st
 from PIL import Image
 
 from src.dnn_face_detection import detect_faces_dnn
-from src.model_registry import run_model
+from src.history_store import clear_analysis_runs, init_history_db, list_analysis_runs, save_analysis_run
+from src.model_registry import get_pipeline, list_categories, list_pipelines, run_pipeline
 
 
 st.set_page_config(page_title="AI Vision Workbench", layout="wide")
 
 
-PROCESSING_MODES = {
-    "Image Processing": [
-        "Gray",
-        "Gaussian Blur",
-        "Canny Edge",
-        "Histogram Equalization",
-        "Dilate",
-        "Erode",
-    ],
-    "AI Vision": [
-        "Face Detection (Haar)",
-        "Face Detection (DNN)",
-        "Object Detection (YOLO)",
-    ],
-}
-
-
 def init_state():
+    init_history_db()
     defaults = {
-        "history": [],
+        "history": list_analysis_runs(),
         "current_result": None,
         "current_original": None,
         "current_summary": None,
+        "current_export": None,
         "selected_history": None,
     }
     for key, value in defaults.items():
@@ -47,59 +33,80 @@ def image_to_array(uploaded_file):
     return np.array(image)
 
 
-def build_params(operation):
+def build_params(pipeline):
     params = {}
 
-    if operation == "Gaussian Blur":
-        params["ksize"] = st.slider("Kernel Size", 1, 21, 9, step=2)
-    elif operation == "Canny Edge":
-        params["low"] = st.slider("Low Threshold", 50, 150, 100)
-        params["high"] = st.slider("High Threshold", 150, 300, 200)
-    elif operation == "Face Detection (DNN)":
-        params["conf_threshold"] = st.slider(
-            "Confidence Threshold",
-            0.1,
-            0.9,
-            0.5,
-            step=0.05,
+    for spec in pipeline.params:
+        value = st.slider(
+            spec.label,
+            spec.min_value,
+            spec.max_value,
+            spec.default,
+            step=spec.step,
         )
+        params[spec.name] = int(value) if spec.kind == "int" else float(value)
 
     return params
 
 
-def describe_result(operation, params, image, result):
+def describe_result(pipeline, params, image, result):
     original_shape = f"{image.shape[1]} x {image.shape[0]}"
-    result_channels = 1 if result.ndim == 2 else result.shape[2]
+    output = result.image
+    result_channels = 1 if output.ndim == 2 else output.shape[2]
     summary = [
-        f"Mode: {operation}",
+        f"Pipeline: {pipeline.name}",
+        f"Task: {pipeline.task_type}",
+        f"Category: {pipeline.category}",
         f"Input: {original_shape}px",
         f"Output channels: {result_channels}",
+        f"Annotations: {len(result.annotations)}",
     ]
 
     if params:
         formatted_params = ", ".join(f"{key}={value}" for key, value in params.items())
         summary.append(f"Params: {formatted_params}")
 
-    if operation == "Object Detection (YOLO)":
-        summary.append("Status: placeholder pipeline, original image returned")
+    if pipeline.status != "ready":
+        summary.append(f"Status: {pipeline.status}")
 
     return summary
 
 
-def save_history(file_name, group, operation, params, original, result, summary):
-    entry = {
-        "id": datetime.now().strftime("%Y%m%d%H%M%S%f"),
-        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "file_name": file_name,
-        "group": group,
-        "operation": operation,
-        "params": params,
-        "original": original.copy(),
-        "result": result.copy(),
-        "summary": summary,
-    }
-    st.session_state.history.insert(0, entry)
-    st.session_state.history = st.session_state.history[:12]
+def annotation_rows(export_data):
+    if not export_data:
+        return []
+
+    rows = []
+    for index, item in enumerate(export_data.get("annotations", []), start=1):
+        bbox = item["bbox"]
+        rows.append(
+            {
+                "id": index,
+                "label": item["label"],
+                "category": item["category"],
+                "confidence": item["confidence"],
+                "x": bbox["x"],
+                "y": bbox["y"],
+                "width": bbox["width"],
+                "height": bbox["height"],
+            }
+        )
+    return rows
+
+
+def save_history(file_name, group, pipeline, params, original, result, summary, export_data):
+    entry = save_analysis_run(
+        file_name=file_name,
+        category=group,
+        pipeline=pipeline,
+        params=params,
+        original_image=original,
+        result_image=result.image,
+        summary=summary,
+        export_data=export_data,
+    )
+    st.session_state.history = list_analysis_runs()
+    return entry
 
 
 def render_history():
@@ -110,12 +117,17 @@ def render_history():
         return
 
     if st.sidebar.button("Clear History", use_container_width=True):
+        clear_analysis_runs()
         st.session_state.history = []
         st.session_state.selected_history = None
+        st.session_state.current_original = None
+        st.session_state.current_result = None
+        st.session_state.current_summary = None
+        st.session_state.current_export = None
         st.rerun()
 
     for index, item in enumerate(st.session_state.history):
-        label = f"{item['operation']} · {item['file_name']}"
+        label = f"{item['operation']} - {item['file_name']}"
         with st.sidebar.expander(label, expanded=index == 0):
             st.caption(item["time"])
             st.image(item["result"], use_container_width=True)
@@ -124,6 +136,7 @@ def render_history():
                 st.session_state.current_original = item["original"]
                 st.session_state.current_result = item["result"]
                 st.session_state.current_summary = item["summary"]
+                st.session_state.current_export = item["export_data"]
                 st.rerun()
 
 
@@ -158,13 +171,18 @@ def render_workbench():
             accept_multiple_files=False,
         )
 
+        categories = list_categories()
         mode_group = st.radio(
             "Analysis Type",
-            list(PROCESSING_MODES.keys()),
+            categories,
             horizontal=True,
         )
-        operation = st.selectbox("Mode", PROCESSING_MODES[mode_group])
-        params = build_params(operation)
+        available_pipelines = list_pipelines(mode_group)
+        pipeline_names = [item.name for item in available_pipelines]
+        operation = st.selectbox("Mode", pipeline_names)
+        pipeline = get_pipeline(operation)
+        st.caption(f"{pipeline.task_type} - {pipeline.description}")
+        params = build_params(pipeline)
 
         run_analysis = st.button(
             "Run Analysis",
@@ -183,19 +201,22 @@ def render_workbench():
 
     if run_analysis and uploaded_file is not None and image is not None:
         with st.spinner("Running vision pipeline..."):
-            result = run_model(operation, image.copy(), params)
-            summary = describe_result(operation, params, image, result)
-            st.session_state.current_result = result
-            st.session_state.current_summary = summary
-            save_history(
+            result = run_pipeline(pipeline.id, image.copy(), params)
+            summary = describe_result(pipeline, params, image, result)
+            export_data = result.to_export_dict(pipeline, params, image.shape)
+            history_entry = save_history(
                 uploaded_file.name,
                 mode_group,
-                operation,
+                pipeline,
                 params,
                 image,
                 result,
                 summary,
+                export_data,
             )
+            st.session_state.current_result = history_entry["result"]
+            st.session_state.current_summary = history_entry["summary"]
+            st.session_state.current_export = history_entry["export_data"]
         st.success("Analysis saved to history.")
 
     with right:
@@ -229,6 +250,33 @@ def render_workbench():
         with st.expander("Run Details", expanded=True):
             for line in st.session_state.current_summary:
                 st.write(line)
+
+        export_data = st.session_state.current_export
+        rows = annotation_rows(export_data)
+
+        structured, download = st.columns([0.62, 0.38], gap="medium")
+        with structured:
+            st.subheader("Structured Output")
+            if export_data:
+                labels = export_data.get("labels", [])
+                metrics = export_data.get("metrics", {})
+                st.write(f"Labels: {', '.join(labels) if labels else 'None'}")
+                st.json(metrics)
+            if rows:
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No bounding-box annotations for this run.")
+
+        with download:
+            st.subheader("Export")
+            if export_data:
+                st.download_button(
+                    "Download JSON",
+                    data=json.dumps(export_data, indent=2),
+                    file_name=f"{operation.lower().replace(' ', '_')}_result.json",
+                    mime="application/json",
+                    use_container_width=True,
+                )
 
 
 def render_webcam():
